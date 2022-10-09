@@ -185,7 +185,7 @@ const addUnderPlanningAppointementBoundAtom = atom(
 );
 
 function getClickInfos(
-  click: React.PointerEvent<Element>,
+  click: React.MouseEvent<HTMLDivElement, MouseEvent>,
   day: Date,
   type: AppointementBoundType
 ) {
@@ -211,7 +211,7 @@ function getClickInfos(
 
 const handleMouseDownAtom = atom(
   null,
-  (get, set, update: { click: React.PointerEvent<Element>; day: Date }) => {
+  (get, set, update: { click: React.MouseEvent<HTMLDivElement, MouseEvent>; day: Date }) => {
     set(planningAtom, true);
     set(addUnderPlanningAppointementBoundAtom, {
       type: "lower",
@@ -226,7 +226,7 @@ const handleMouseDownAtom = atom(
 
 const handleMouseUpAtom = atom(
   null,
-  (get, set, update: { click: React.PointerEvent<Element>; day: Date }) => {
+  (get, set, update: { click: React.MouseEvent<HTMLDivElement, MouseEvent>; day: Date }) => {
     set(planningAtom, false);
     set(addUnderPlanningAppointementBoundAtom, {
       type: "upper",
@@ -237,7 +237,7 @@ const handleMouseUpAtom = atom(
 
 const handleMouseMoveAtom = atom(
   null,
-  (get, set, update: { click: React.PointerEvent<Element>; day: Date }) => {
+  (get, set, update: { click: React.MouseEvent<HTMLDivElement, MouseEvent>; day: Date }) => {
     if (get(planningAtom)) {
       let bounds = update.click.currentTarget.getBoundingClientRect();
       let y = update.click.clientY - bounds.top;
