@@ -6,8 +6,12 @@ import {
   format,
   getHours,
   getMinutes,
+  isAfter,
+  isBefore,
+  isEqual,
   isSameDay,
   isToday,
+  isWithinInterval,
   startOfDay,
   startOfWeek,
 } from "date-fns";
@@ -156,6 +160,15 @@ type AppointementBound = {
 };
 
 type Appointement = [AppointementBound, AppointementBound];
+type AppointementBoundWithCollision = AppointementBound & {
+  collisionCount: number;
+  offset: number;
+};
+
+type AppointementWithCollision = [
+  AppointementBoundWithCollision,
+  AppointementBoundWithCollision
+];
 
 type NullableAppointementBound = AppointementBound | null;
 type UnderPlanningAppointement = [
@@ -211,7 +224,11 @@ function getClickInfos(
 
 const handleMouseDownAtom = atom(
   null,
-  (get, set, update: { click: React.MouseEvent<HTMLDivElement, MouseEvent>; day: Date }) => {
+  (
+    get,
+    set,
+    update: { click: React.MouseEvent<HTMLDivElement, MouseEvent>; day: Date }
+  ) => {
     set(planningAtom, true);
     set(addUnderPlanningAppointementBoundAtom, {
       type: "lower",
@@ -226,7 +243,11 @@ const handleMouseDownAtom = atom(
 
 const handleMouseUpAtom = atom(
   null,
-  (get, set, update: { click: React.MouseEvent<HTMLDivElement, MouseEvent>; day: Date }) => {
+  (
+    get,
+    set,
+    update: { click: React.MouseEvent<HTMLDivElement, MouseEvent>; day: Date }
+  ) => {
     set(planningAtom, false);
     set(addUnderPlanningAppointementBoundAtom, {
       type: "upper",
@@ -237,7 +258,11 @@ const handleMouseUpAtom = atom(
 
 const handleMouseMoveAtom = atom(
   null,
-  (get, set, update: { click: React.MouseEvent<HTMLDivElement, MouseEvent>; day: Date }) => {
+  (
+    get,
+    set,
+    update: { click: React.MouseEvent<HTMLDivElement, MouseEvent>; day: Date }
+  ) => {
     if (get(planningAtom)) {
       let bounds = update.click.currentTarget.getBoundingClientRect();
       let y = update.click.clientY - bounds.top;
@@ -383,15 +408,117 @@ function AppointementBuilder({ day }: { day: Date }) {
   );
 }
 
-const appointementAtomsAtom = atom<PrimitiveAtom<Appointement>[]>([]);
+const appointementAtomsAtom = atom<PrimitiveAtom<AppointementWithCollision>[]>(
+  []
+);
 
-const createAppointementAtom = (appointement: Appointement) =>
-  atom<Appointement>(appointement);
+function computeCollisions(
+  appointements: AppointementWithCollision[]
+): AppointementWithCollision[] {
+  const columns: AppointementWithCollision[][] = [];
+  let lastAppointementEnding: Date | null = null;
+
+  let columnIndex = 0;
+
+  appointements.forEach((appointement) => {
+    const [{ date: startDate }, { date: endDate }] = appointement;
+
+    let isAppointementPlaced = false;
+
+    for (const column of columns) {
+      if (
+        (isWithinInterval(startDate, {
+          start: column[column.length - 1][0].date,
+          end: column[column.length - 1][1].date,
+        }) ||
+          isWithinInterval(endDate, {
+            start: column[column.length - 1][0].date,
+            end: column[column.length - 1][1].date,
+          })) &&
+        !isEqual(startDate, column[column.length - 1][1].date)
+      ) {
+        column.push(appointement);
+        isAppointementPlaced = true;
+        break;
+      }
+    }
+
+    if (!isAppointementPlaced) columns.push([appointement]);
+
+    if (!lastAppointementEnding || isAfter(endDate, lastAppointementEnding))
+      lastAppointementEnding = endDate;
+  });
+
+  // console.log(columns);
+
+  return columns.flatMap((column) => {
+    return column.map((a, index): AppointementWithCollision => {
+      return [
+        { ...a[0], collisionCount: column.length, offset: index },
+        { ...a[1], collisionCount: column.length, offset: index },
+      ];
+    });
+  });
+}
+
+const createAppointementWithCollisionAtom = (
+  appointement: AppointementWithCollision
+) => atom<AppointementWithCollision>(appointement);
 export const addAppointementAtom = atom(
   null,
-  (_get, set, update: Appointement) => {
-    const appointementAtom = createAppointementAtom(update);
-    set(appointementAtomsAtom, (prev) => [...prev, appointementAtom]);
+  (get, set, update: Appointement) => {
+    set(appointementAtomsAtom, (prev) => {
+      let insertIndex = prev.length;
+
+      for (let i = 0; i < prev.length; i++) {
+        const [{ date: startingDate }, { date: endingDate }] = get(prev[i]);
+
+        if (
+          isBefore(update[0].date, startingDate) ||
+          (isEqual(update[0].date, startingDate) &&
+            isAfter(update[1].date, endingDate))
+        ) {
+          insertIndex = i;
+        }
+      }
+
+      const newAppointements = [...prev];
+
+      newAppointements.splice(
+        insertIndex,
+        0,
+        createAppointementWithCollisionAtom([
+          { ...update[0], collisionCount: 0, offset: 0 },
+          { ...update[1], collisionCount: 0, offset: 0 },
+        ])
+      );
+
+      for (let i = 0; i < newAppointements.length; i++) {
+        const [{ date: startingDate, collisionCount, offset, ...rest }] = get(
+          newAppointements[i]
+        );
+
+        if (isBefore(update[0].date, startingDate)) {
+          insertIndex = i;
+        }
+      }
+
+      const withCollision = computeCollisions(
+        newAppointements.map((appointement) => {
+          // Reset collisions
+          return [
+            { ...get(appointement)[0], collisionCount: 0, offset: 0 },
+            { ...get(appointement)[1], collisionCount: 0, offset: 0 },
+          ];
+        })
+      );
+
+      newAppointements.forEach((appointement, index) =>
+        set(appointement, withCollision[index])
+      );
+
+      return newAppointements;
+    });
   }
 );
 
@@ -400,7 +527,7 @@ function Appointement({
   appointementAtom,
 }: {
   day: Date;
-  appointementAtom: PrimitiveAtom<Appointement>;
+  appointementAtom: PrimitiveAtom<AppointementWithCollision>;
 }) {
   const [lowerBound, upperBound] = useAtomValue(appointementAtom);
 
@@ -419,13 +546,16 @@ function Appointement({
 
   return (
     <div
-      className="absolute inset-x-0 z-20 select-none pointer-events-none"
+      className="absolute z-20 rounded select-none pointer-events-none border border-white"
       style={{
+        left: `calc((100% / ${lowerBound.collisionCount}) * ${lowerBound.offset})`,
+        width: `calc(100% / ${lowerBound.collisionCount})`,
+        zIndex: `${20 + lowerBound.collisionCount}`,
         top: `${lowerBoundPosition}%`,
         height: `calc(${upperBoundPosition - lowerBoundPosition}% - 2px)`,
       }}
     >
-      <div className="relative h-full px-2 py-px flex flex-col bg-sky-600 rounded select-none drop-shadow-[0_3px_3px_rgba(0,0,0,0.50)]">
+      <div className="relative h-full rounded px-2 py-px flex flex-col bg-sky-600 select-none">
         <span className="text-xs text-white">(Untitled)</span>
         <span className="text-xs text-white">
           {format(lowerBound.date, "h:mm")}
@@ -462,7 +592,7 @@ function CurrenTimeIndicator({ day }: { day: Date }) {
 
   return (
     <div
-      className="h-[12px] w-full absolute left-[-2px] z-40"
+      className="h-[12px] w-full absolute left-[-2px] z-[300]"
       style={{ top: `calc(${position}% - 6px)` }}
     >
       <div className="h-[12px] w-[12px] ml-[-5px] rounded-full bg-red-500" />
